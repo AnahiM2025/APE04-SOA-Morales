@@ -1,0 +1,22 @@
+# Java / Maven
+target/
+*.class
+
+# .NET / C#
+bin/
+obj/
+.vs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node (React/PWA)
+node_modules/
+dist/
+build/
+
+# Secretos
+.env
+*.log
