@@ -1,52 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listarVehiculos, normalizarToken } from '../public/api.js';
+import { iniciarSesion, cerrarSesion, haySesion, registrarVenta, listarVehiculos, consultarVenta } from '../public/api.js';
 
-// Los datos de estas pruebas son simulados y no sustituyen a la API real.
-test('normaliza un token pegado con prefijo Bearer', () => {
-  assert.equal(normalizarToken('  bearer abc.def.ghi  '), 'abc.def.ghi');
+const resp = (codigo, cuerpo) => async () => new Response(cuerpo === undefined ? null : JSON.stringify(cuerpo), { status: codigo });
+
+test('login guarda el JWT solo en memoria y cerrarSesion lo borra', async () => {
+  cerrarSesion();
+  await iniciarSesion('operador', 'x', resp(200, { access_token: 'jwt1', expires_in: 900 }));
+  assert.equal(haySesion(), true);
+  cerrarSesion();
+  assert.equal(haySesion(), false);
 });
 
-test('GET transmite Authorization y recibe una lista JSON', async () => {
-  let solicitud;
-  const simularFetch = async (ruta, opciones) => {
-    solicitud = { ruta, opciones };
-    return new Response(JSON.stringify([{ idVehiculo: 1, marca: 'Ejemplo' }]), {
-      status: 200, headers: { 'Content-Type': 'application/json' },
-    });
-  };
-  const resultado = await listarVehiculos('mi.token', simularFetch);
-  assert.equal(solicitud.ruta, '/api/vehiculos');
-  assert.equal(solicitud.opciones.headers.get('Authorization'), 'Bearer mi.token');
-  assert.equal(solicitud.opciones.cache, 'no-store');
-  assert.equal(resultado.vehiculos.length, 1);
+test('login con credenciales malas da mensaje claro y no deja sesion', async () => {
+  cerrarSesion();
+  await assert.rejects(() => iniciarSesion('a', 'b', resp(401, { error: 'x' })), /incorrectos/);
+  assert.equal(haySesion(), false);
 });
 
-test('sin token no agrega Authorization (el backend decide 401)', async () => {
-  const simularFetch = async (_ruta, opciones) => {
-    assert.equal(opciones.headers.has('Authorization'), false);
-    return new Response('[]', { status: 200 });
-  };
-  await listarVehiculos('', simularFetch);
+test('registrarVenta envia Idempotency-Key, JWT y numeros', async () => {
+  await iniciarSesion('operador', 'x', resp(200, { access_token: 'jwtX' }));
+  let visto;
+  const f = async (ruta, op) => { visto = { ruta, op }; return new Response(JSON.stringify({ id: 5, estado: 'COMPLETADA' }), { status: 201 }); };
+  const r = await registrarVenta('3', '4', 'clave-12345', f);
+  assert.equal(r.codigoHttp, 201);
+  assert.equal(visto.ruta, '/api/ventas');
+  assert.equal(visto.op.headers.get('Idempotency-Key'), 'clave-12345');
+  assert.equal(visto.op.headers.get('Authorization'), 'Bearer jwtX');
+  assert.deepEqual(JSON.parse(visto.op.body), { vehiculoId: 3, compradorId: 4 });
 });
 
-test('identifica HTTP 401 sin mostrar una lista inventada', async () => {
-  await assert.rejects(
-    listarVehiculos('vencido', async () => new Response('No autorizado', { status: 401 })),
-    (error) => error.codigoHttp === 401 && /401/.test(error.message),
-  );
+test('errores: 403/409 son definitivos; 503 y red caida son inciertos', async () => {
+  await iniciarSesion('operador', 'x', resp(200, { access_token: 'j' }));
+  await assert.rejects(() => registrarVenta(1, 1, 'clave-12345', resp(403, {})), (e) => e.codigoHttp === 403 && !e.incierto);
+  await assert.rejects(() => registrarVenta(1, 1, 'clave-12345', resp(409, {})), (e) => e.codigoHttp === 409 && !e.incierto);
+  await assert.rejects(() => registrarVenta(1, 1, 'clave-12345', resp(503, {})), (e) => e.incierto === true);
+  await assert.rejects(() => registrarVenta(1, 1, 'clave-12345', async () => { throw new TypeError('red'); }), (e) => e.incierto === true);
 });
 
-test('rechaza un objeto en lugar del arreglo JSON contratado', async () => {
-  await assert.rejects(
-    listarVehiculos('jwt', async () => new Response('{"data":[]}', { status: 200 })),
-    /arreglo JSON/,
-  );
-});
-
-test('informa error de conectividad', async () => {
-  await assert.rejects(
-    listarVehiculos('jwt', async () => { throw new Error('sin red'); }),
-    /conectar/,
-  );
+test('listados exigen arreglo y consultarVenta valida el ID', async () => {
+  await iniciarSesion('operador', 'x', resp(200, { access_token: 'j' }));
+  await assert.rejects(() => listarVehiculos(resp(200, { no: 'arreglo' })), /arreglo/);
+  await assert.rejects(() => consultarVenta('12abc'), /entero/);
 });

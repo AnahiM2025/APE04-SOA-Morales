@@ -54,3 +54,8 @@ button { border-radius: 11px; min-height: 43px; padding: 10px 14px; font-weight:
 .dato-precio .dato-valor { font-size: 16px; color: #0e6581; }
 footer { text-align: center; color: #7c8f9b; line-height: 1.5; font-size: 11px; margin: 22px 0; }
 @media (max-width: 390px) { .app { padding: 13px 10px; } .panel { padding: 15px; } .acciones button { flex-basis: 100%; } .encabezado .logo { flex-basis: 50px; height: 50px; } }
+
+/* Controles añadidos para el registro de ventas */
+select, input[type="text"] { width: 100%; box-sizing: border-box; padding: 0.75rem; margin: 0.25rem 0 0.9rem;
+  border: 1px solid #b8c4cc; border-radius: 10px; font: inherit; background: #fff; color: inherit; }
+[hidden] { display: none !important; }

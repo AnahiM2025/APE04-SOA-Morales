@@ -2,7 +2,7 @@
 # Ofrece ORM, consultas y transacciones SQL.
 from sqlalchemy import select, or_
 # Importa el componente local correspondiente a esta responsabilidad.
-from app.models import Venta
+from app.models import Venta, Comprador
 
 
 # Aísla las consultas SQLAlchemy del resto de la aplicación.
@@ -39,3 +39,15 @@ class VentaRepository:
             (Venta.notificacion != "ENVIADA")))
             # Ordena por ID y procesa como máximo 100 por iteración.
             .order_by(Venta.id).limit(100)).all()
+
+    # Lista compradores (compartidos por todos los usuarios autorizados).
+    def listar_compradores(self, limite, desplazamiento):
+        return self.db.scalars(select(Comprador).order_by(Comprador.id)
+                               .limit(limite).offset(desplazamiento)).all()
+
+    # Lista ventas, las más recientes primero; opcionalmente filtra por estado.
+    def listar_ventas(self, estado, limite, desplazamiento):
+        consulta = select(Venta).order_by(Venta.id.desc())
+        if estado:
+            consulta = consulta.where(Venta.estado == estado)
+        return self.db.scalars(consulta.limit(limite).offset(desplazamiento)).all()

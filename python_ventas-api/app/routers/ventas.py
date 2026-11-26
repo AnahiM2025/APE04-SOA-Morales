@@ -2,13 +2,14 @@
 # Carga tipos y funciones que se utilizarán más abajo.
 from typing import Annotated
 # Publica endpoints web y valida solicitudes.
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 # Importa el componente local correspondiente a esta responsabilidad.
 from app.db import SessionLocal
 from app.models import Venta, Comprador
 from app.schemas import CrearVenta, CrearComprador
-from app.security import identidad, vendedor, propietario
+from app.security import identidad, vendedor, lector
 from app.errors import ApiError
+from app.repositories.venta_repository import VentaRepository
 from app.services import venta_service as service
 # Crea el agrupador de rutas HTTP con prefijo /api.
 router = APIRouter(prefix="/api")
@@ -27,7 +28,7 @@ def crear_comprador(d: CrearComprador, u=Depends(identidad)):
         # Registra la entidad y ejecuta el INSERT para obtener el ID.
         db.add(c); db.flush()
         # Envía al cliente el nuevo comprador sin exponer campos internos.
-        return {"id": c.id, "nombre": c.nombre, "correo": c.correo}
+        return {"id": c.id, "documento": c.documento, "nombre": c.nombre, "correo": c.correo}
 
 
 # Expone POST /api/ventas; requiere JWT y Idempotency-Key.
@@ -56,6 +57,7 @@ def crear(d: CrearVenta, response: Response,
 @router.get("/ventas/{id}")
 # Obtiene un identificador y usuario autenticado.
 def obtener(id: int, u=Depends(identidad)):
+    lector(u)
     # Gestiona automáticamente la apertura y cierre del recurso.
     with SessionLocal() as db:
         # Busca la venta mediante clave primaria.
@@ -64,7 +66,32 @@ def obtener(id: int, u=Depends(identidad)):
         if v is None:
             # Responde 404 en vez de un error genérico.
             raise ApiError(404, "VENTA_NO_EXISTE", "Venta inexistente")
-        # Restringe la consulta al dueño o administrador.
-        propietario(u, v.usuario)
         # Devuelve el mismo formato JSON que POST.
         return service.salida(v)
+
+
+# Expone GET /api/compradores: listado para Windows Forms y la PWA.
+@router.get("/compradores")
+def listar_compradores(u=Depends(identidad),
+                       limite: int = Query(100, ge=1, le=500),
+                       desplazamiento: int = Query(0, ge=0)):
+    # Permite CONSULTA, OPERADOR y ADMIN.
+    lector(u)
+    with SessionLocal() as db:
+        return [{"id": c.id, "documento": c.documento, "nombre": c.nombre,
+                 "correo": c.correo}
+                for c in VentaRepository(db).listar_compradores(limite, desplazamiento)]
+
+
+# Expone GET /api/ventas: listado administrativo y consulta web (React).
+@router.get("/ventas")
+def listar_ventas(u=Depends(identidad),
+                  estado: str | None = Query(
+                      None, pattern=r"^(PENDIENTE|EN_REVISION|COMPLETADA|FALLIDA)$"),
+                  limite: int = Query(100, ge=1, le=500),
+                  desplazamiento: int = Query(0, ge=0)):
+    # Permite CONSULTA, OPERADOR y ADMIN; solo lectura.
+    lector(u)
+    with SessionLocal() as db:
+        return [service.salida(v)
+                for v in VentaRepository(db).listar_ventas(estado, limite, desplazamiento)]

@@ -1,205 +1,167 @@
-import { useState } from 'react';
-import { listarVehiculos } from './api/vehiculosApi.js';
+import { useCallback, useMemo, useState } from 'react';
 import './App.css';
+import { cerrarSesion, haySesion, iniciarSesion, listarVehiculos, listarVentas } from './api/api.js';
 
-// Ecuador usa dólares estadounidenses. No modifica el precio de la API.
-const dinero = new Intl.NumberFormat('es-EC', {
-  style: 'currency',
-  currency: 'USD',
-});
+const dinero = new Intl.NumberFormat('es-EC', { style: 'currency', currency: 'USD' });
+const mostrar = (v) => (v === null || v === undefined || v === '' ? '—' : String(v));
+const precio = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? dinero.format(Number(v)) : '—');
 
-// Apoyo visual: el precio se muestra tal como llega, formateado en USD.
-function mostrarPrecio(precio) {
-  if (precio === null || precio === undefined || precio === '') return '—';
-  const numero = Number(precio);
-  return Number.isFinite(numero) ? dinero.format(numero) : String(precio);
-}
-
-export default function App() {
-  // useState guarda datos de la pantalla. Cuando cambian, React la actualiza.
-  const [token, setToken] = useState('');
-  const [mostrarToken, setMostrarToken] = useState(false);
-  const [vehiculos, setVehiculos] = useState([]);
-  const [marca, setMarca] = useState('');
-  const [seleccionado, setSeleccionado] = useState(null);
-  const [cargando, setCargando] = useState(false);
-  const [mensaje, setMensaje] = useState('Listo para consultar.');
+function Login({ alEntrar }) {
+  const [usuario, setUsuario] = useState('');
+  const [clave, setClave] = useState('');
   const [error, setError] = useState('');
-  const [codigoHttp, setCodigoHttp] = useState(null);
+  const [cargando, setCargando] = useState(false);
 
-  // El filtro se aplica a los vehículos ya recibidos; no consulta MySQL.
-  const visibles = vehiculos.filter((v) =>
-    String(v.marca ?? '').toLowerCase().includes(marca.trim().toLowerCase()),
-  );
-
-  // Evento ejecutado al pulsar "Consultar vehículos".
-  async function consultarVehiculos(evento) {
-    evento.preventDefault(); // Evita que el navegador recargue la página.
-    setCargando(true);
-    setError('');
-    setMensaje('Consultando la API de vehículos...');
-    setCodigoHttp(null);
-    setVehiculos([]); // Evita confundir una consulta fallida con datos antiguos.
-    setSeleccionado(null);
-
-    try {
-      // La conexión HTTP se realiza en otro archivo, no en la interfaz.
-      const resultado = await listarVehiculos(token);
-      setVehiculos(resultado.vehiculos);
-      setCodigoHttp(resultado.codigoHttp);
-      setMensaje(`Consulta correcta: ${resultado.vehiculos.length} vehículos.`);
-    } catch (e) {
-      // Errores 401, 403 y red quedan visibles para el usuario.
-      setCodigoHttp(e.status ?? null);
-      setError(e.message);
-      setMensaje('La consulta no pudo completarse.');
-    } finally {
-      // Se ejecuta tanto cuando fetch tiene éxito como cuando falla.
-      setCargando(false);
-    }
+  async function enviar(e) {
+    e.preventDefault();
+    setCargando(true); setError('');
+    try { await iniciarSesion(usuario, clave); setClave(''); alEntrar(); }
+    catch (err) { setError(err.message); }
+    finally { setCargando(false); }
   }
 
   return (
-    <main className="contenedor">
-      <header className="cabecera">
-        <div className="marca-producto">PRÁCTICA WEB · REACT + FETCH</div>
-        <h1>Consulta de vehículos</h1>
-        <p>Cliente web de la API REST existente en Java Spring Boot.</p>
-      </header>
+    <section className="panel">
+      <p className="marca-producto">Cliente web · solo consulta</p>
+      <h1>Consulta de vehículos y ventas</h1>
+      <form onSubmit={enviar}>
+        <label htmlFor="usuario">Usuario</label>
+        <input id="usuario" value={usuario} onChange={(e) => setUsuario(e.target.value)} autoComplete="username" autoCapitalize="none" />
+        <label htmlFor="clave">Contraseña</label>
+        <input id="clave" type="password" value={clave} onChange={(e) => setClave(e.target.value)} autoComplete="current-password" />
+        <div className="acciones"><button type="submit" disabled={cargando}>{cargando ? 'Entrando…' : 'Iniciar sesión'}</button></div>
+      </form>
+      {error && <p className="nota error" role="alert">{error}</p>}
+      <p className="ayuda">El token permanece en memoria; no se guarda en el navegador. Este cliente no registra ventas.</p>
+    </section>
+  );
+}
 
-      <section className="panel" aria-labelledby="titulo-acceso">
-        <h2 id="titulo-acceso">1. Conexión con la API</h2>
-        <p className="ayuda">
-          La aplicación consulta <code>GET /api/vehiculos</code> mediante el
-          proxy local hacia <code>127.0.0.1:8080</code>.
-        </p>
+function Vehiculos({ alExpirar }) {
+  const [marca, setMarca] = useState('');
+  const [datos, setDatos] = useState(null);
+  const [seleccionado, setSeleccionado] = useState(null);
+  const [estado, setEstado] = useState({ cargando: false, error: '' });
 
-        <form onSubmit={consultarVehiculos}>
-          <label htmlFor="jwt">Token JWT de Postman (sin escribir Bearer)</label>
-          <div className="linea-token">
-            <input
-              id="jwt"
-              type={mostrarToken ? 'text' : 'password'}
-              autoComplete="off"
-              spellCheck="false"
-              placeholder="Pegar token JWT obtenido previamente"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-            />
-            <button
-              className="secundario"
-              type="button"
-              onClick={() => setMostrarToken((actual) => !actual)}
-              aria-label={mostrarToken ? 'Ocultar token' : 'Mostrar token'}
-            >
-              {mostrarToken ? 'Ocultar' : 'Mostrar'}
-            </button>
-          </div>
+  const consultar = useCallback(async (filtro) => {
+    setEstado({ cargando: true, error: '' }); setSeleccionado(null);
+    try { setDatos(await listarVehiculos(filtro)); setEstado({ cargando: false, error: '' }); }
+    catch (e) { setDatos(null); setEstado({ cargando: false, error: e.message }); if (e.codigoHttp === 401) alExpirar(); }
+  }, [alExpirar]);
 
-          <div className="acciones">
-            <button type="submit" disabled={cargando}>
-              {cargando ? 'Consultando...' : 'Consultar vehículos'}
-            </button>
-            <button
-              className="secundario"
-              type="button"
-              disabled={cargando}
-              onClick={() => {
-                setToken('');
-                setMostrarToken(false);
-              }}
-            >
-              Limpiar token
-            </button>
-          </div>
-        </form>
-
-        <div className={error ? 'estado estado-error' : 'estado estado-ok'} role="status" aria-live="polite">
-          <span>{error || mensaje}</span>
-          {codigoHttp !== null && <strong>HTTP {codigoHttp}</strong>}
-        </div>
-        <p className="nota">El JWT permanece en memoria: no se guarda en localStorage ni en archivos.</p>
-      </section>
-
-      <section className="panel" aria-labelledby="titulo-listado">
-        <div className="titulo-listado">
-          <div>
-            <h2 id="titulo-listado">2. Catálogo de vehículos</h2>
-            <p className="ayuda">Datos recibidos del backend; filtro ejecutado en el navegador.</p>
-          </div>
-          <span className="contador">{visibles.length} visibles</span>
-        </div>
-
-        <label htmlFor="filtroMarca">Filtrar por marca</label>
-        <input
-          id="filtroMarca"
-          type="search"
-          placeholder="Ejemplo: Toyota"
-          value={marca}
-          onChange={(e) => setMarca(e.target.value)}
-          disabled={cargando}
-        />
-
+  return (
+    <section className="panel">
+      <h2 className="titulo-listado">Vehículos <span className="contador">{datos ? `${datos.length} resultado(s)` : ''}</span></h2>
+      <form className="linea-token" onSubmit={(e) => { e.preventDefault(); consultar(marca); }}>
+        <input aria-label="Filtrar por marca" placeholder="Filtrar por marca (ej. Kia)" value={marca} onChange={(e) => setMarca(e.target.value)} />
+        <button type="submit" disabled={estado.cargando}>Consultar</button>
+        <button type="button" className="secundario" disabled={estado.cargando} onClick={() => { setMarca(''); consultar(''); }}>Todos</button>
+      </form>
+      {estado.cargando && <p className="nota" role="status">Consultando vehículos…</p>}
+      {estado.error && <p className="nota error" role="alert">{estado.error}</p>}
+      {datos && datos.length === 0 && <p className="sin-datos">No hay vehículos para ese filtro.</p>}
+      {datos && datos.length > 0 && (
         <div className="tabla-scroll">
           <table>
-            <thead>
-              <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Marca</th>
-                <th scope="col">Modelo</th>
-                <th scope="col">Precio</th>
-                <th scope="col">Estado</th>
-              </tr>
-            </thead>
+            <thead><tr><th>ID</th><th>Marca</th><th>Modelo</th><th>Placa</th><th>Año</th><th>Precio</th><th>Estado</th></tr></thead>
             <tbody>
-              {visibles.map((v, indice) => (
-                <tr key={v.idVehiculo ?? v.id ?? indice}>
-                  <td>
-                    <button
-                      className="enlace-id"
-                      type="button"
-                      onClick={() => setSeleccionado(v)}
-                      aria-label={`Ver detalle del vehículo ${v.idVehiculo ?? v.id ?? ''}`}
-                    >
-                      {v.idVehiculo ?? v.id ?? '—'}
-                    </button>
-                  </td>
-                  <td>{v.marca ?? '—'}</td>
-                  <td>{v.modelo ?? '—'}</td>
-                  <td>{mostrarPrecio(v.precio)}</td>
-                  <td>{v.estado ?? '—'}</td>
+              {datos.map((v) => (
+                <tr key={v.idVehiculo}>
+                  <td><button type="button" className="enlace-id" onClick={() => setSeleccionado(v)}>{v.idVehiculo}</button></td>
+                  <td>{mostrar(v.marca)}</td><td>{mostrar(v.modelo)}</td><td>{mostrar(v.placa)}</td>
+                  <td>{mostrar(v.anio)}</td><td>{precio(v.precio)}</td><td>{mostrar(v.estado)}</td>
                 </tr>
               ))}
-              {visibles.length === 0 && (
-                <tr>
-                  <td className="sin-datos" colSpan="5">
-                    {cargando
-                      ? 'Cargando vehículos...'
-                      : vehiculos.length === 0
-                        ? 'Aún no hay vehículos para mostrar. Presione Consultar vehículos.'
-                        : 'No hay vehículos que coincidan con la marca.'}
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="panel" aria-labelledby="titulo-detalle">
-        <h2 id="titulo-detalle">3. Detalle del vehículo</h2>
-        {seleccionado ? (
-          <dl className="detalle">
-            <div><dt>ID</dt><dd>{seleccionado.idVehiculo ?? seleccionado.id ?? '—'}</dd></div>
-            <div><dt>Marca</dt><dd>{seleccionado.marca ?? '—'}</dd></div>
-            <div><dt>Modelo</dt><dd>{seleccionado.modelo ?? '—'}</dd></div>
-            <div><dt>Precio</dt><dd>{mostrarPrecio(seleccionado.precio)}</dd></div>
-            <div><dt>Estado</dt><dd>{seleccionado.estado ?? '—'}</dd></div>
+      )}
+      {seleccionado && (
+        <aside className="detalle" aria-label="Detalle del vehículo">
+          <h3>{mostrar(seleccionado.marca)} {mostrar(seleccionado.modelo)}</h3>
+          <dl>
+            {[['ID', seleccionado.idVehiculo], ['Placa', seleccionado.placa], ['Chasis', seleccionado.chasis], ['Año', seleccionado.anio],
+              ['Color', seleccionado.color], ['Precio', precio(seleccionado.precio)], ['Estado', seleccionado.estado]].map(([k, v]) => (
+              <div key={k}><dt>{k}</dt><dd>{mostrar(v)}</dd></div>
+            ))}
           </dl>
-        ) : (
-          <p className="ayuda">Después de consultar, seleccione el ID de una fila para ver sus datos.</p>
-        )}
-      </section>
+        </aside>
+      )}
+    </section>
+  );
+}
+
+function Ventas({ alExpirar }) {
+  const [filtro, setFiltro] = useState('');
+  const [datos, setDatos] = useState(null);
+  const [estado, setEstado] = useState({ cargando: false, error: '' });
+
+  const consultar = useCallback(async (f) => {
+    setEstado({ cargando: true, error: '' });
+    try { setDatos(await listarVentas(f)); setEstado({ cargando: false, error: '' }); }
+    catch (e) { setDatos(null); setEstado({ cargando: false, error: e.message }); if (e.codigoHttp === 401) alExpirar(); }
+  }, [alExpirar]);
+
+  // Panel web: resumen calculado solo con los datos devueltos por la API.
+  const resumen = useMemo(() => {
+    if (!datos) return null;
+    const completadas = datos.filter((v) => v.estado === 'COMPLETADA');
+    return { total: datos.length, completadas: completadas.length,
+      monto: completadas.reduce((s, v) => s + (Number(v.precioAcordado) || 0), 0) };
+  }, [datos]);
+
+  return (
+    <section className="panel">
+      <h2 className="titulo-listado">Ventas <span className="contador">{datos ? `${datos.length} resultado(s)` : ''}</span></h2>
+      <form className="linea-token" onSubmit={(e) => { e.preventDefault(); consultar(filtro); }}>
+        <select aria-label="Filtrar por estado" value={filtro} onChange={(e) => setFiltro(e.target.value)}>
+          <option value="">Todos los estados</option>
+          {['COMPLETADA', 'PENDIENTE', 'EN_REVISION', 'FALLIDA'].map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button type="submit" disabled={estado.cargando}>Consultar ventas</button>
+      </form>
+      {estado.cargando && <p className="nota" role="status">Consultando ventas…</p>}
+      {estado.error && <p className="nota error" role="alert">{estado.error}</p>}
+      {resumen && (
+        <p className="nota" role="status">Ventas: {resumen.total} · completadas: {resumen.completadas} · monto completado: {dinero.format(resumen.monto)}</p>
+      )}
+      {datos && datos.length === 0 && <p className="sin-datos">No hay ventas para ese filtro.</p>}
+      {datos && datos.length > 0 && (
+        <div className="tabla-scroll">
+          <table>
+            <thead><tr><th>ID</th><th>Vehículo</th><th>Comprador</th><th>Precio</th><th>Estado</th><th>Notificación</th></tr></thead>
+            <tbody>
+              {datos.map((v) => (
+                <tr key={v.id}><td>{v.id}</td><td>{mostrar(v.vehiculoId)}</td><td>{mostrar(v.compradorId)}</td>
+                  <td>{precio(v.precioAcordado)}</td><td>{mostrar(v.estado)}</td><td>{mostrar(v.notificacion)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export default function App() {
+  const [activa, setActiva] = useState(haySesion());
+  const [vista, setVista] = useState('vehiculos');
+  const salir = useCallback(() => { cerrarSesion(); setActiva(false); }, []);
+
+  return (
+    <main className="contenedor">
+      {!activa ? <Login alEntrar={() => setActiva(true)} /> : (
+        <>
+          <header className="cabecera">
+            <nav className="acciones" aria-label="Secciones">
+              <button type="button" className={vista === 'vehiculos' ? '' : 'secundario'} onClick={() => setVista('vehiculos')}>Vehículos</button>
+              <button type="button" className={vista === 'ventas' ? '' : 'secundario'} onClick={() => setVista('ventas')}>Ventas</button>
+              <button type="button" className="secundario" onClick={salir}>Cerrar sesión</button>
+            </nav>
+          </header>
+          {vista === 'vehiculos' ? <Vehiculos alExpirar={salir} /> : <Ventas alExpirar={salir} />}
+        </>
+      )}
     </main>
   );
 }

@@ -1,53 +1,93 @@
 /**
- * Cliente HTTP de vehículos. No conoce la interfaz ni accede a MySQL.
- * La ruta relativa /api/vehiculos es reenviada por server.mjs a Spring Boot.
+ * Cliente HTTP de la PWA. No conoce la interfaz ni MySQL.
+ * Todas las rutas son relativas: server.mjs las reenvia a NGINX.
+ * El JWT vive solo en esta variable (memoria): no se guarda en el almacenamiento del navegador ni en cookies.
  */
-export function normalizarToken(entrada = '') {
-  // Se aceptan tanto JWT sin prefijo como textos que empiezan con Bearer.
-  return String(entrada).trim().replace(/^Bearer\s+/i, '').trim();
+let jwt = '';
+
+export const haySesion = () => Boolean(jwt);
+export const cerrarSesion = () => { jwt = ''; };
+
+export function nuevaClave() {
+  // Idempotency-Key: 8-100 caracteres [A-Za-z0-9_-]; un UUID cumple.
+  return globalThis.crypto?.randomUUID?.() ?? `k${Date.now()}${Math.random().toString(36).slice(2, 12)}`;
 }
 
-export async function listarVehiculos(entradaToken, ejecutarFetch = fetch) {
-  const jwt = normalizarToken(entradaToken);
-  const encabezados = new Headers({ Accept: 'application/json' });
+const MENSAJES = {
+  400: 'HTTP 400: solicitud incorrecta.',
+  401: 'HTTP 401: sesión ausente, inválida o vencida. Inicie sesión de nuevo.',
+  403: 'HTTP 403: su usuario no tiene permiso para esta operación.',
+  404: 'HTTP 404: recurso no encontrado.',
+  409: 'HTTP 409: conflicto (el vehículo ya no está disponible o la clave se reutilizó con otros datos).',
+  422: 'HTTP 422: datos inválidos.',
+  502: 'HTTP 502: el backend no está disponible.',
+  503: 'HTTP 503: servicio no disponible.',
+  504: 'HTTP 504: el backend no respondió a tiempo.',
+};
 
-  // Si no hay JWT, el backend es quien determina si responde HTTP 401.
-  if (jwt) encabezados.set('Authorization', `Bearer ${jwt}`);
-
-  let respuesta;
+async function pedir(metodo, ruta, { cuerpo, cabeceras = {}, autenticado = true } = {}, f = fetch) {
+  const h = new Headers({ Accept: 'application/json', ...cabeceras });
+  if (autenticado && jwt) h.set('Authorization', `Bearer ${jwt}`);
+  let r;
   try {
-    // No se almacena en caché la respuesta con datos protegidos.
-    respuesta = await ejecutarFetch('/api/vehiculos', {
-      method: 'GET',
-      headers: encabezados,
-      cache: 'no-store',
-    });
+    r = await f(ruta, { method: metodo, headers: h, body: cuerpo, cache: 'no-store' });
   } catch {
-    throw new Error('No se pudo conectar con el servicio. Compruebe la red y Spring Boot.');
+    const e = new Error('No se pudo conectar con el servicio. Compruebe la red y el backend.');
+    e.incierto = true; // la peticion pudo o no llegar: el resultado se desconoce
+    throw e;
   }
-
-  if (!respuesta.ok) {
-    const mensajes = {
-      401: 'HTTP 401: JWT ausente, inválido o vencido.',
-      403: 'HTTP 403: el usuario no tiene permiso para consultar.',
-      404: 'HTTP 404: no se encontró /api/vehiculos.',
-      502: 'HTTP 502: no se pudo establecer conexión con Spring Boot.',
-      503: 'HTTP 503: el servicio no está disponible.',
-      504: 'HTTP 504: Spring Boot no respondió a tiempo.',
-    };
-    const error = new Error(mensajes[respuesta.status] || `HTTP ${respuesta.status}: consulta no completada.`);
-    error.codigoHttp = respuesta.status;
-    throw error;
+  let datos = null;
+  try { datos = await r.json(); } catch { /* cuerpo vacio o no JSON */ }
+  if (!r.ok) {
+    const detalle = datos && (datos.mensaje || datos.message || datos.error_description || datos.error);
+    const e = new Error(`${MENSAJES[r.status] || `HTTP ${r.status}: operación no completada.`}${detalle ? ` (${detalle})` : ''}`);
+    e.codigoHttp = r.status;
+    e.incierto = r.status >= 500; // un 5xx no garantiza que la venta no se haya registrado
+    throw e;
   }
+  return { codigoHttp: r.status, datos };
+}
 
-  let datos;
+export async function iniciarSesion(usuario, clave, f = fetch) {
+  if (!usuario || !clave) throw new Error('Ingrese usuario y contraseña.');
+  const cuerpo = new URLSearchParams({ grant_type: 'password', username: usuario.trim(), password: clave });
   try {
-    datos = await respuesta.json();
-  } catch {
-    throw new Error('La API devolvió una respuesta que no es JSON válido.');
+    const { datos } = await pedir('POST', '/oauth/token',
+      { cuerpo, cabeceras: { 'Content-Type': 'application/x-www-form-urlencoded' }, autenticado: false }, f);
+    if (!datos?.access_token) throw new Error('La respuesta de autenticación no contiene un token.');
+    jwt = datos.access_token;
+    return { expiraEn: datos.expires_in };
+  } catch (e) {
+    if (e.codigoHttp === 400 || e.codigoHttp === 401) e.message = 'Usuario o contraseña incorrectos.';
+    throw e;
   }
-  if (!Array.isArray(datos)) {
-    throw new Error('La API debe devolver un arreglo JSON de vehículos.');
-  }
-  return { codigoHttp: respuesta.status, vehiculos: datos };
+}
+
+const arreglo = (datos, que) => {
+  if (!Array.isArray(datos)) throw new Error(`La API debe devolver un arreglo de ${que}.`);
+  return datos;
+};
+
+export async function listarVehiculos(f = fetch) {
+  const r = await pedir('GET', '/api/vehiculos', {}, f);
+  return { codigoHttp: r.codigoHttp, vehiculos: arreglo(r.datos, 'vehículos') };
+}
+
+export async function listarCompradores(f = fetch) {
+  const r = await pedir('GET', '/api/compradores', {}, f);
+  return { codigoHttp: r.codigoHttp, compradores: arreglo(r.datos, 'compradores') };
+}
+
+export async function registrarVenta(vehiculoId, compradorId, clave, f = fetch) {
+  const r = await pedir('POST', '/api/ventas', {
+    cuerpo: JSON.stringify({ vehiculoId: Number(vehiculoId), compradorId: Number(compradorId) }),
+    cabeceras: { 'Content-Type': 'application/json', 'Idempotency-Key': clave },
+  }, f);
+  return { codigoHttp: r.codigoHttp, venta: r.datos };
+}
+
+export async function consultarVenta(id, f = fetch) {
+  if (!/^\d+$/.test(String(id).trim())) throw new Error('El ID de venta debe ser un número entero.');
+  const r = await pedir('GET', `/api/ventas/${String(id).trim()}`, {}, f);
+  return { codigoHttp: r.codigoHttp, venta: r.datos };
 }

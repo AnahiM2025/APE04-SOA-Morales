@@ -1,22 +1,17 @@
-# Java / Maven
+# Dependencias y compilaciones
+node_modules/
 target/
-*.class
-
-# .NET / C#
 bin/
 obj/
 .vs/
-
-# Python
+dist/
 .venv/
 __pycache__/
 *.pyc
-
-# Node (React/PWA)
-node_modules/
-dist/
-build/
-
-# Secretos
+# Secretos y configuracion local
 .env
-*.log*.zip 
+scripts/env.ps1
+*.csproj.user
+# Registros y evidencias generadas
+infra/nginx/logs/*.log
+evidencias/

@@ -18,7 +18,13 @@ public class NotificacionKeyFilter extends OncePerRequestFilter{
         if(key.length()<32) throw new IllegalArgumentException("Clave no cumple los 32 crt");
         this.key=key;
     }
-     @Override
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest req) {
+        // La clave compartida protege solo la escritura interna; los GET usan JWT.
+        return !"POST".equals(req.getMethod());
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest req,
     HttpServletResponse res, FilterChain chain)
     throws IOException, ServletException {

@@ -47,3 +47,10 @@ Se mantiene abierta la terminal. La API utilizará `http://127.0.0.1:8080` cuand
 4. Se detiene el servidor con `Ctrl + C`.
 
 > Los archivos de configuración con secretos permanecen fuera del repositorio.
+
+## Cambios de la APE 04
+- Secretos (`APP_JWT_SECRET`, `APP_CLIENT_SECRET`, `VENTAS_SERVICE_KEY`, `NOTIFICACIONES_KEY`, `DB_PASSWORD`) leídos de **variables de entorno**; ya no están en el repositorio.
+- Segunda instancia: `$env:SERVER_PORT="8082"; mvn spring-boot:run` (mismas variables y misma base).
+- `/actuator/health` público (solo `health`) para NGINX y el monitor.
+- `BootstrapUsuarios` (perfil `local`): crea `admin`, `operador` y `consulta` con `APP_BOOTSTRAP_PASSWORD`.
+- Esquema `venta_vehiculos` creado automáticamente (`createDatabaseIfNotExist`, `ddl-auto=update`).

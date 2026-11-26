@@ -3,12 +3,11 @@
 import hashlib
 # Interpreta o genera cuerpos JSON.
 import json
-# Genera identificadores únicos.
-from uuid import uuid4
+# Genera identificadores únicos (uuid5: mismo evento = mismo identificador).
+import logging
+from uuid import uuid4, uuid5, NAMESPACE_URL
 # Evita errores de redondeo en importes.
 from decimal import Decimal
-# Realiza solicitudes HTTP a las APIs Java.
-import httpx
 # Ofrece ORM, consultas y transacciones SQL.
 from sqlalchemy.exc import IntegrityError
 # Importa el componente local correspondiente a esta responsabilidad.
@@ -18,9 +17,8 @@ from app.models import Venta, Comprador
 from app.repositories.venta_repository import VentaRepository
 from app.clients.vehiculos_client import VehiculosClient, FalloRemoto
 # Importa el componente local correspondiente a esta responsabilidad.
-from app.config import NOTIF_URL, NOTIF_KEY
 from app.errors import ApiError
-from app.security import propietario
+from app.messaging.publisher import publicar_evento_venta, PublicacionError
 # Prepara el cliente HTTP de reservas de Java.
 remote = VehiculosClient()
 
@@ -67,8 +65,6 @@ def crear(datos, clave, usuario):
             if comprador is None:
                 # Responde con HTTP 404 para el comprador no registrado.
                 raise ApiError(404, "COMPRADOR_NO_EXISTE", "Comprador inexistente")
-            # Impide usar un comprador ajeno, salvo que sea ADMIN.
-            propietario(usuario, comprador.usuario)
             # Construye la venta PENDIENTE, con UUID de operación único.
             v = Venta(operacion_id=str(uuid4()), usuario=usuario["usuario"],
                       # Asocia IDs y deja el precio pendiente de Java.
@@ -196,32 +192,32 @@ def procesar(id):
             v.error_detalle = "Pendiente de consultar y conciliar con Java"
 
 
-# Publica un aviso de venta exitosa al servicio Java receptor.
+# Arma el evento de negocio: solo identificadores y fecha, sin JWT ni datos personales.
+def evento_venta(v):
+    return {
+        # uuid5 sobre la operación: un reintento reutiliza el mismo eventoId (deduplicación).
+        "eventoId": str(uuid5(NAMESPACE_URL, "venta-realizada:" + v.operacion_id)),
+        "tipo": "VENTA_REALIZADA",
+        "ventaId": v.id,
+        "vehiculoId": v.vehiculo_id,
+        "fechaHora": v.fecha.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+# Publica en RabbitMQ el evento de una venta COMPLETADA (patrón outbox con reintento).
 def notificar(id):
     # Abre transacción que hace commit automático si no hay excepción.
     with SessionLocal.begin() as db:
-        # Obtiene la venta con bloqueo SQL para evitar procesamiento concurrente.
+        # Obtiene la venta con bloqueo SQL para evitar publicaciones simultáneas.
         v = VentaRepository(db).bloquear(id)
-        # Si no existe, preparará una nueva operación.
+        # Solo notifica ventas confirmadas y que aún no tienen evento publicado.
         if v is None or v.estado != "COMPLETADA" or v.notificacion == "ENVIADA":
-            # Finaliza inmediatamente porque ya no hay trabajo pendiente.
             return
-        # Empieza una sección controlada para recuperar los errores esperados.
         try:
-            # Hace un POST HTTP al receptor de notificaciones.
-            r = httpx.post(NOTIF_URL + "/api/notificaciones", timeout=3,
-                # Envía la clave compartida; debe coincidir con el filtro Java.
-                headers={"X-Notification-Key": NOTIF_KEY}, json={
-                    # Agrega IDs de vehículo y comprador referenciados.
-                    "vehiculoId": v.vehiculo_id, "tipo": "VENTA",
-                    # Usa el correo del comprador de esta venta.
-                    "destinatario": v.comprador.correo,
-                    # Construye un mensaje rastreable por ID y UUID.
-                    "mensaje": f"Venta {v.id} operación {v.operacion_id} completada",
-                })
-            # Marca como ENVIADA solo ante HTTP exitoso 2xx.
-            v.notificacion = "ENVIADA" if 200 <= r.status_code < 300 else "PENDIENTE"
-        # Si hay un problema de red, conserva la notificación pendiente.
-        except httpx.RequestError:
-            # Permite reintento posterior del worker.
+            # Retorna únicamente si RabbitMQ confirmó el mensaje persistente.
+            publicar_evento_venta(evento_venta(v))
+            v.notificacion = "ENVIADA"
+        except PublicacionError:
+            # La venta sigue COMPLETADA; el worker reintentará el mismo evento.
+            logging.warning("Evento de venta %s pendiente de publicar", v.id)
             v.notificacion = "PENDIENTE"

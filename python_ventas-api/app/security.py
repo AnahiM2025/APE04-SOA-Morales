@@ -75,3 +75,10 @@ def propietario(usuario, dueno):
     if usuario["usuario"] != dueno and "ROLE_ADMIN" not in usuario["roles"]:
         # Notifica un error a la capa responsable de gestionarlo.
         raise ApiError(403, "SIN_PERMISO", "Recurso de otro usuario")
+
+
+# Verifica si puede consultar compradores y ventas (solo lectura).
+def lector(usuario):
+    # Permite CONSULTA, OPERADOR y ADMIN.
+    if not {"ROLE_CONSULTA", "ROLE_OPERADOR", "ROLE_ADMIN"}.intersection(usuario["roles"]):
+        raise ApiError(403, "SIN_PERMISO", "Se requiere CONSULTA, OPERADOR o ADMIN")

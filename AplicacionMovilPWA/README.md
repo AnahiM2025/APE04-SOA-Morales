@@ -1,58 +1,17 @@
-# Aplicación Móvil PWA — Consulta de Vehículos
+# PWA móvil · registro de ventas (único cliente que vende)
 
-**Autor:** Javier Vargas
+Flujo: usuario/contraseña → JWT (en memoria) → elegir vehículo DISPONIBLE y comprador → `POST /api/ventas` con `Idempotency-Key` → ver estado.
 
-## 1. Software necesario
-
-- Windows 10 u 11 y Visual Studio Code.
-- Node.js 20 o superior, con npm.
-- Chrome o navegador compatible.
-- API Java Spring Boot activa en `http://127.0.0.1:8080` y JWT autorizado.
-- Para probar desde Android por USB: Android Platform Tools (`adb`), opcional.
-
-## 2. Preparar el proyecto
-
-1. Se descarga o clona `soa-pwa-movil` y se abre la carpeta que contiene `package.json` y `server.mjs`.
-2. Se comprueba Node.js y npm:
-
+## Ejecución (PowerShell)
 ```powershell
-node -v
-npm -v
+$env:APP_CLIENT_ID     = "<client-id de la API Java>"
+$env:APP_CLIENT_SECRET = "<client-secret de la API Java>"   # vive solo en el servidor Node, nunca en el navegador
+$env:API_BASE_URL      = "http://127.0.0.1:8090"            # NGINX
+npm start                                                    # http://localhost:5173
 ```
+Pruebas: `npm test` (12 pruebas, sin dependencias).
 
-Esta aplicación no declara dependencias externas que deban instalarse con `npm install`.
-
-## 3. Ejecutar en Visual Studio Code
-
-```powershell
-npm run dev
-```
-
-Se abre `http://localhost:5173`. El servidor reenvía `GET /api/vehiculos` a Java en el puerto `8080`.
-
-## 4. Compilar y comprobar la versión generada
-
-Se detiene la ejecución anterior con `Ctrl + C` y se ejecuta:
-
-```powershell
-npm run build
-npm run preview
-```
-
-Se abre `http://localhost:4173`. La compilación queda en la carpeta `dist`.
-
-## 5. Probar en Android (opcional)
-
-1. Se conecta el teléfono por USB con la depuración USB habilitada.
-2. Con `npm run preview` activo y `adb` instalado, se ejecuta en otra terminal:
-
-```powershell
-adb devices
-adb reverse tcp:4173 tcp:4173
-```
-
-3. Se abre `http://localhost:4173` en Chrome del teléfono.
-4. Se introduce el JWT y se presiona **Consultar vehículos**.
-5. Cuando el navegador lo permita, se utiliza la opción **Instalar aplicación** o **Añadir a pantalla de inicio**.
-
-> La versión incluida solo lista vehículos con JWT; no implementa inicio de sesión ni registro de ventas.
+## Decisiones de seguridad
+- El navegador solo habla con `server.mjs` (mismo origen). Este reenvía una **lista cerrada** de rutas: `POST /oauth/token`, `GET /api/vehiculos`, `GET /api/compradores`, `POST /api/ventas`, `GET /api/ventas/{id}`.
+- El `client-secret` se agrega en el servidor; el JWT no se guarda en almacenamiento del navegador.
+- Reintentos: si el resultado de una venta es incierto (corte de red o 5xx) se reutiliza la misma `Idempotency-Key`; ante un rechazo definitivo (4xx) se genera otra.

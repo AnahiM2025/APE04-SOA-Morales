@@ -1,0 +1,24 @@
+# RabbitMQ con panel de administracion. Credenciales en infra/rabbitmq/.env (NO se sube a Git).
+#   docker compose --env-file .env up -d
+# Panel: http://127.0.0.1:15672   |   AMQP: 127.0.0.1:5672
+# La cola durable "notificaciones.ventas" la declara el publicador (Python) y el consumidor (Java).
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq-ape04
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?defina RABBITMQ_USER en .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?defina RABBITMQ_PASSWORD en .env}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+volumes:
+  rabbitmq_data:
